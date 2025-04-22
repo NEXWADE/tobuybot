@@ -1,30 +1,64 @@
+import os
+import json
+import requests
 from flask import Flask, request
 from telegram import Bot, Update
-from telegram.ext import Dispatcher, CommandHandler
-import os
+from telegram.ext import Dispatcher, MessageHandler, filters
+from dotenv import load_dotenv
 
-TOKEN = os.getenv("TELEGRAM_TOKEN")
-bot = Bot(token=TOKEN)
+load_dotenv()
+
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
+bot = Bot(token=TELEGRAM_TOKEN)
 
 app = Flask(__name__)
 dispatcher = Dispatcher(bot=bot, update_queue=None, workers=0)
 
-# Команда старт
-def start(update: Update, context):
-    update.message.reply_text("✅ Бот запущений через Render і працює по webhook!")
+def get_token():
+    with open("tokens.json", "r") as f:
+        return json.loads(f.read())["access_token"]
 
-dispatcher.add_handler(CommandHandler("start", start))
+def get_list_id(token, name):
+    url = f"https://graph.microsoft.com/v1.0/me/todo/lists"
+    headers = {"Authorization": f"Bearer {token}"}
+    r = requests.get(url, headers=headers)
+    for l in r.json().get("value", []):
+        if l["displayName"] == name:
+            return l["id"]
+    # якщо не існує — створити
+    r = requests.post(url, headers=headers, json={"displayName": name})
+    return r.json().get("id")
 
-@app.route(f"/{TOKEN}", methods=["POST"])
+def create_task(token, list_id, title):
+    url = f"https://graph.microsoft.com/v1.0/me/todo/lists/{list_id}/tasks"
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json"
+    }
+    data = {"title": title}
+    return requests.post(url, headers=headers, json=data)
+
+def handle(update: Update, context):
+    token = get_token()
+    list_id = get_list_id(token, "Купити")
+    r = create_task(token, list_id, update.message.text)
+    if r.status_code == 201:
+        update.message.reply_text("✅ Додано в список 'Купити'")
+    else:
+        update.message.reply_text(f"❌ Помилка: {r.text}")
+
+dispatcher.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle))
+
+@app.route(f"/{TELEGRAM_TOKEN}", methods=["POST"])
 def webhook():
     update = Update.de_json(request.get_json(force=True), bot)
     dispatcher.process_update(update)
     return "ok"
 
 @app.route("/")
-def home():
-    return "Бот працює! 👋"
+def index():
+    return "Бот працює 👋"
 
 if __name__ == "__main__":
-    bot.set_webhook(url=f"https://{os.environ.get('RENDER_EXTERNAL_HOSTNAME')}/{TOKEN}")
+    bot.set_webhook(url=f"https://{os.getenv('RENDER_EXTERNAL_HOSTNAME')}/{TELEGRAM_TOKEN}")
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
