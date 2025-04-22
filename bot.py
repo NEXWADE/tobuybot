@@ -1,3 +1,4 @@
+import logging
 import os
 import requests
 from flask import Flask, request
@@ -7,41 +8,67 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+# Telegram і Graph налаштування
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
-GRAPH_TOKEN = os.getenv("GRAPH_TOKEN")
+TENANT_ID = os.getenv("TENANT_ID")
+CLIENT_ID = os.getenv("CLIENT_ID")
+CLIENT_SECRET = os.getenv("CLIENT_SECRET")
 
+# Telegram bot
 bot = Bot(token=TELEGRAM_TOKEN)
 app = Flask(__name__)
-dispatcher = Dispatcher(bot=bot, update_queue=None, workers=0)
+dispatcher = Dispatcher(bot=bot, update_queue=None, workers=4)
 
-def get_list_id(token, name):
-    url = "https://graph.microsoft.com/v1.0/me/todo/lists"
-    headers = {"Authorization": f"Bearer {token}"}
-    r = requests.get(url, headers=headers)
-    for l in r.json().get("value", []):
-        if l["displayName"] == name:
-            return l["id"]
-    r = requests.post(url, headers=headers, json={"displayName": name})
-    return r.json().get("id")
+# Отримання Graph токена
+def get_graph_token():
+    url = f"https://login.microsoftonline.com/{TENANT_ID}/oauth2/v2.0/token"
+    headers = {"Content-Type": "application/x-www-form-urlencoded"}
+    data = {
+        "client_id": CLIENT_ID,
+        "scope": "https://graph.microsoft.com/.default",
+        "client_secret": CLIENT_SECRET,
+        "grant_type": "client_credentials"
+    }
+    response = requests.post(url, headers=headers, data=data)
+    response.raise_for_status()
+    return response.json()["access_token"]
 
-def create_task(token, list_id, title):
-    url = f"https://graph.microsoft.com/v1.0/me/todo/lists/{list_id}/tasks"
+# Додавання завдання до списку "Купити"
+def add_task_to_graph(task_title):
+    access_token = get_graph_token()
     headers = {
-        "Authorization": f"Bearer {token}",
+        "Authorization": f"Bearer {access_token}",
         "Content-Type": "application/json"
     }
-    data = {"title": title}
-    return requests.post(url, headers=headers, json=data)
 
-def handle(update: Update, context):
-    list_id = get_list_id(GRAPH_TOKEN, "Купити")
-    r = create_task(GRAPH_TOKEN, list_id, update.message.text)
-    if r.status_code == 201:
-        update.message.reply_text("✅ Додано в список 'Купити'")
-    else:
-        update.message.reply_text(f"❌ Помилка: {r.text}")
+    # Отримуємо ID списку "Купити"
+    list_url = "https://graph.microsoft.com/v1.0/me/todo/lists"
+    response = requests.get(list_url, headers=headers)
+    response.raise_for_status()
+    lists = response.json()["value"]
+    list_id = next((l["id"] for l in lists if l["displayName"].lower() == "купити"), None)
 
-dispatcher.add_handler(MessageHandler(Filters.text & ~Filters.command, handle))
+    if not list_id:
+        raise Exception("Список 'Купити' не знайдено.")
+
+    # Створюємо завдання
+    task_url = f"https://graph.microsoft.com/v1.0/me/todo/lists/{list_id}/tasks"
+    data = {"title": task_title}
+    task_response = requests.post(task_url, headers=headers, json=data)
+    task_response.raise_for_status()
+    return task_response.json()
+
+# Обробка повідомлення
+def handle_message(update: Update, context):
+    try:
+        task = update.message.text
+        add_task_to_graph(task)
+        update.message.reply_text(f"✅ Додано до списку 'Купити': {task}")
+    except Exception as e:
+        logging.error(f"❌ Помилка: {e}")
+        update.message.reply_text(f"❌ Сталася помилка: {str(e)}")
+
+dispatcher.add_handler(MessageHandler(Filters.text & ~Filters.command, handle_message))
 
 @app.route(f"/{TELEGRAM_TOKEN}", methods=["POST"])
 def webhook():
