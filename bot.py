@@ -1,95 +1,104 @@
-
 import os
 import json
-import logging
-import msal
 import requests
-from telegram import Update
-from telegram.ext import Application, MessageHandler, filters, ContextTypes
+from flask import Flask, request
+from telegram import Bot, Update
+from telegram.ext import Dispatcher, MessageHandler, filters
+from msal import ConfidentialClientApplication
 
-# Telegram Token
-TELEGRAM_TOKEN = "7290625782:AAHCUfq-Whva1tMQz_K_BiIuVuV76Nq-YA8"
+# Telegram bot token
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "7290625782:AAHCUfq-Whva1tMQz_K_BiIuVuV76Nq-YA8")
 
-# Microsoft Graph config
+# Microsoft credentials
 CLIENT_ID = "371faded-c039-4f6e-9c40-b27b0d494226"
 CLIENT_SECRET = "CGY8Q~-tvqxjjQQjYscrY66gu_ay0wdNrC8TXdeK"
 TENANT_ID = "62fdf1b9-4d46-455a-b861-3f055235b05c"
-AUTHORITY = f"https://login.microsoftonline.com/{TENANT_ID}"
-SCOPES = ["Tasks.ReadWrite", "offline_access"]
+SCOPES = ["https://graph.microsoft.com/.default"]
 
-# Token cache file
-TOKEN_FILE = "tokens.json"
+# Target user
+TARGET_EMAIL = "glibkovalenko@outlook.com"
+TODO_LIST_NAME = "Купити"
 
-def load_cache():
-    cache = msal.SerializableTokenCache()
-    if os.path.exists(TOKEN_FILE):
-        cache.deserialize(open(TOKEN_FILE, "r").read())
-    return cache
+app = Flask(__name__)
+bot = Bot(token=TELEGRAM_TOKEN)
+dispatcher = Dispatcher(bot, update_queue=None)
 
-def save_cache(cache):
-    if cache.has_state_changed:
-        with open(TOKEN_FILE, "w") as f:
-            f.write(cache.serialize())
 
-def get_access_token():
-    cache = load_cache()
-    app = msal.PublicClientApplication(
-        CLIENT_ID,
-        authority=AUTHORITY,
-        token_cache=cache
+def get_graph_token():
+    app = ConfidentialClientApplication(
+        client_id=CLIENT_ID,
+        client_credential=CLIENT_SECRET,
+        authority=f"https://login.microsoftonline.com/{TENANT_ID}"
     )
+    result = app.acquire_token_silent(SCOPES, account=None)
+    if not result:
+        result = app.acquire_token_for_client(scopes=SCOPES)
+    return result.get("access_token")
 
-    accounts = app.get_accounts()
-    if accounts:
-        result = app.acquire_token_silent(SCOPES, account=accounts[0])
-    else:
-        flow = app.initiate_device_flow(scopes=SCOPES)
-        if "user_code" not in flow:
-            raise Exception("Failed to create device flow")
-        print(f"Go to {flow['verification_uri']} and enter code {flow['user_code']}")
-        result = app.acquire_token_by_device_flow(flow)
 
-    if "access_token" in result:
-        save_cache(cache)
-        return result["access_token"]
-    else:
-        raise Exception(f"Auth failed: {result.get('error_description')}")
+def get_list_id(token, email, list_name):
+    url = f"https://graph.microsoft.com/v1.0/users/{email}/todo/lists"
+    headers = {"Authorization": f"Bearer {token}"}
+    response = requests.get(url, headers=headers)
+    if response.status_code == 200:
+        for item in response.json().get("value", []):
+            if item["displayName"] == list_name:
+                return item["id"]
+    return None
 
-async def handle(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = update.message.text
-    user_email = "glibkovalenko@outlook.com"
-    list_url = f"https://graph.microsoft.com/v1.0/users/{user_email}/todo/lists"
-    task_url_template = "https://graph.microsoft.com/v1.0/users/{}/todo/lists/{}/tasks"
 
-    access_token = get_access_token()
-
+def add_task_to_list(token, email, list_id, task_title):
+    url = f"https://graph.microsoft.com/v1.0/users/{email}/todo/lists/{list_id}/tasks"
     headers = {
-        "Authorization": f"Bearer {access_token}",
+        "Authorization": f"Bearer {token}",
         "Content-Type": "application/json"
     }
+    data = {
+        "title": task_title
+    }
+    response = requests.post(url, headers=headers, json=data)
+    return response.status_code == 201
 
-    list_resp = requests.get(list_url, headers=headers)
-    if list_resp.status_code != 200:
-        await update.message.reply_text(f"❌ Список не отримано: {list_resp.text}")
+
+def handle_message(update: Update, context):
+    message = update.message.text
+    token = get_graph_token()
+
+    if not token:
+        update.message.reply_text("❌ Не вдалося отримати токен Microsoft Graph.")
         return
 
-    todo_lists = list_resp.json().get("value", [])
-    if not todo_lists:
-        await update.message.reply_text("❌ Список завдань не знайдено.")
+    list_id = get_list_id(token, TARGET_EMAIL, TODO_LIST_NAME)
+    if not list_id:
+        update.message.reply_text("❌ Не знайдено список у Microsoft To Do.")
         return
 
-    default_list_id = todo_lists[0]["id"]
-    task_url = task_url_template.format(user_email, default_list_id)
-    payload = {"title": text}
-
-    task_resp = requests.post(task_url, headers=headers, json=payload)
-    if task_resp.status_code == 201:
-        await update.message.reply_text("✅ Завдання додано!")
+    if add_task_to_list(token, TARGET_EMAIL, list_id, message):
+        update.message.reply_text("✅ Додано до списку!")
     else:
-        await update.message.reply_text(f"❌ Помилка додавання: {task_resp.text}")
+        update.message.reply_text("❌ Помилка при додаванні задачі.")
+
+
+@app.route(f"/{TELEGRAM_TOKEN}", methods=["POST"])
+def webhook():
+    update = Update.de_json(request.get_json(force=True), bot)
+    dispatcher.process_update(update)
+    return "ok", 200
+
+
+@app.route("/", methods=["GET"])
+def index():
+    return "бот працює", 200
+
+
+def main():
+    bot.delete_webhook()
+    webhook_url = f"https://tobuybot.onrender.com/{TELEGRAM_TOKEN}"
+    bot.set_webhook(url=webhook_url)
+    print(f"Webhook встановлено на {webhook_url}")
+
+
+dispatcher.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
 if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO)
-    app = Application.builder().token(TELEGRAM_TOKEN).build()
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle))
-    app.run_polling()
+    main()
