@@ -3,7 +3,7 @@ import json
 import requests
 from flask import Flask, request
 from telegram import Bot, Update
-from telegram.ext import Dispatcher, MessageHandler, filters
+from telegram.ext import Dispatcher, MessageHandler, Filters
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -19,13 +19,12 @@ def get_token():
         return json.loads(f.read())["access_token"]
 
 def get_list_id(token, name):
-    url = f"https://graph.microsoft.com/v1.0/me/todo/lists"
+    url = "https://graph.microsoft.com/v1.0/me/todo/lists"
     headers = {"Authorization": f"Bearer {token}"}
     r = requests.get(url, headers=headers)
     for l in r.json().get("value", []):
         if l["displayName"] == name:
             return l["id"]
-    # якщо не існує — створити
     r = requests.post(url, headers=headers, json={"displayName": name})
     return r.json().get("id")
 
@@ -47,7 +46,7 @@ def handle(update: Update, context):
     else:
         update.message.reply_text(f"❌ Помилка: {r.text}")
 
-dispatcher.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle))
+dispatcher.add_handler(MessageHandler(Filters.text & ~Filters.command, handle))
 
 @app.route(f"/{TELEGRAM_TOKEN}", methods=["POST"])
 def webhook():
