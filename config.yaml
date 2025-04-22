@@ -1,0 +1,7 @@
+telegram_token: "7290625782:AAHCUfq-Whva1tMQz_K_BiIuVuV76Nq-YA8"
+microsoft:
+  client_id: "371faded-c039-4f6e-9c40-b27b0d494226"
+  client_secret: "YOUR_CLIENT_SECRET"
+  tenant_id: "62fdf1b9-4d46-455a-b861-3f055235b05c"
+  user_email: "glibkovalenko@outlook.com"
+  list_name: "Купити"
