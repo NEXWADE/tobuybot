@@ -1,5 +1,4 @@
 import os
-import json
 import requests
 from flask import Flask, request
 from telegram import Bot, Update
@@ -9,14 +8,11 @@ from dotenv import load_dotenv
 load_dotenv()
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
-bot = Bot(token=TELEGRAM_TOKEN)
+GRAPH_TOKEN = os.getenv("GRAPH_TOKEN")
 
+bot = Bot(token=TELEGRAM_TOKEN)
 app = Flask(__name__)
 dispatcher = Dispatcher(bot=bot, update_queue=None, workers=0)
-
-def get_token():
-    with open("tokens.json", "r") as f:
-        return json.loads(f.read())["access_token"]
 
 def get_list_id(token, name):
     url = "https://graph.microsoft.com/v1.0/me/todo/lists"
@@ -38,9 +34,8 @@ def create_task(token, list_id, title):
     return requests.post(url, headers=headers, json=data)
 
 def handle(update: Update, context):
-    token = get_token()
-    list_id = get_list_id(token, "Купити")
-    r = create_task(token, list_id, update.message.text)
+    list_id = get_list_id(GRAPH_TOKEN, "Купити")
+    r = create_task(GRAPH_TOKEN, list_id, update.message.text)
     if r.status_code == 201:
         update.message.reply_text("✅ Додано в список 'Купити'")
     else:
