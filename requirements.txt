@@ -2,4 +2,6 @@ flask
 requests
 python-dotenv
 python-telegram-bot==20.7
+msal
+requests
 
